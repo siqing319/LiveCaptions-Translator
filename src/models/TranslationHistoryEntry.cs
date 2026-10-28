@@ -4,6 +4,8 @@ namespace LiveCaptionsTranslator.models
 {
     public class TranslationHistoryEntry
     {
+        [Ignore]
+        public long Id { get; set; }
         public required string Timestamp { get; set; }
         [Ignore]
         public required string TimestampFull { get; set; }

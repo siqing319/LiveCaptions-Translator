@@ -15,7 +15,14 @@ namespace LiveCaptionsTranslator.models
 
         public int max_tokens { get; set; } = 128;
         public bool stream { get; set; } = false;
-        public int keep_alive { get; set; } = 600;
+
+        /// <summary>
+        /// Ollama-specific keep-alive hint. Left null (and therefore omitted from the JSON
+        /// body) for every other wire format, because those endpoints reject unknown fields.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonIgnore(Condition =
+            System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public int? keep_alive { get; set; }
     }
 
     public class IntegratedLLMRequestData(string model, List<BaseLLMConfig.Message> messages, double temperature)
@@ -42,6 +49,7 @@ namespace LiveCaptionsTranslator.models
         : BaseLLMRequestData(model, messages, temperature)
     {
         public bool think { get; set; } = false;
+        public int? keep_alive { get; set; } = 600;
     }
 
     public class OpenRouterRequestData(string model, List<BaseLLMConfig.Message> messages, double temperature)
@@ -85,5 +93,30 @@ namespace LiveCaptionsTranslator.models
     {
         // Supported Platform: xAI (Grok)
         public string reasoning_effort { get; set; } = "low";
+    }
+
+    /// <summary>
+    /// Qwen-MT style dedicated translation endpoint.
+    /// Such endpoints reject `system` messages and only accept exactly one `user` message,
+    /// so the source/target languages and the interpreter instruction are passed through
+    /// `translation_options` instead.
+    /// </summary>
+    public class QwenMTRequestData(string model, List<BaseLLMConfig.Message> messages, double temperature)
+        : BaseLLMRequestData(model, messages, temperature)
+    {
+        public class Term
+        {
+            public string source { get; set; }
+            public string target { get; set; }
+        }
+
+        public class TranslationOptions
+        {
+            public string source_lang { get; set; } = "auto";
+            public string target_lang { get; set; } = "zh";
+            public List<Term>? terms { get; set; }
+        }
+
+        public TranslationOptions translation_options { get; set; } = new();
     }
 }

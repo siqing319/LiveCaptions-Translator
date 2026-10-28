@@ -182,6 +182,23 @@ namespace LiveCaptionsTranslator.models
                 ? configs[key][configIndices[key]]
                 : new TranslateAPIConfig();
 
+        // Finds one named OpenAI-compatible slot.
+        // Returns null when the name is empty or no slot carries that name, so callers can fall back.
+        public OpenAIConfig? GetOpenAIConfig(string? configName)
+        {
+            if (string.IsNullOrWhiteSpace(configName) ||
+                !configs.TryGetValue("OpenAI", out var slots) || slots == null)
+                return null;
+            return slots.OfType<OpenAIConfig>().FirstOrDefault(
+                slot => string.Equals(slot.ConfigName?.Trim(), configName.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        // All named OpenAI-compatible slots, in the order they appear in setting.json.
+        public IEnumerable<OpenAIConfig> OpenAIConfigs =>
+            configs.TryGetValue("OpenAI", out var slots) && slots != null
+                ? slots.OfType<OpenAIConfig>()
+                : Enumerable.Empty<OpenAIConfig>();
+
         public Setting()
         {
             apiName = "Google";

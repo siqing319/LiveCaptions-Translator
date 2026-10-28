@@ -67,6 +67,7 @@ namespace LiveCaptionsTranslator.utils
         {
             return new TranslationHistoryEntry
             {
+                Id = reader.GetInt64(reader.GetOrdinal("Id")),
                 Timestamp = localTime.ToString(timestampFormat),
                 TimestampFull = localTime.ToString("yyyy-MM-dd HH:mm:ss"),
                 SourceText = reader.GetString(reader.GetOrdinal("SourceText")),
@@ -114,7 +115,7 @@ namespace LiveCaptionsTranslator.utils
             int offset = Math.Max(0, (page - 1) * maxRow);
 
             using (var command = new SqliteCommand(@"
-                SELECT Timestamp, SourceText, TranslatedText, TargetLanguage, ApiUsed
+                SELECT Id, Timestamp, SourceText, TranslatedText, TargetLanguage, ApiUsed
                 FROM TranslationHistory
                 WHERE SourceText LIKE @search OR TranslatedText LIKE @search
                 ORDER BY Timestamp DESC
@@ -157,10 +158,24 @@ namespace LiveCaptionsTranslator.utils
             }
         }
 
+        public static async Task DeleteRows(IEnumerable<long> ids)
+        {
+            using var connection = new SqliteConnection(CONNECTION_STRING);
+            await connection.OpenAsync();
+            using var transaction = connection.BeginTransaction();
+            foreach (long id in ids.Distinct())
+            {
+                using var command = new SqliteCommand("DELETE FROM TranslationHistory WHERE Id = @id", connection, transaction);
+                command.Parameters.AddWithValue("@id", id);
+                await command.ExecuteNonQueryAsync();
+            }
+            await transaction.CommitAsync();
+        }
+
         public static async Task<TranslationHistoryEntry?> LoadLastTranslation(CancellationToken token = default)
         {
             string selectQuery = @"
-                SELECT Timestamp, SourceText, TranslatedText, TargetLanguage, ApiUsed
+                SELECT Id, Timestamp, SourceText, TranslatedText, TargetLanguage, ApiUsed
                 FROM TranslationHistory
                 ORDER BY Id DESC
                 LIMIT 1";
@@ -183,7 +198,7 @@ namespace LiveCaptionsTranslator.utils
             var history = new List<TranslationHistoryEntry>();
 
             string selectQuery = @"
-                SELECT Timestamp, SourceText, TranslatedText, TargetLanguage, ApiUsed
+                SELECT Id, Timestamp, SourceText, TranslatedText, TargetLanguage, ApiUsed
                 FROM TranslationHistory
                 ORDER BY Timestamp DESC";
 

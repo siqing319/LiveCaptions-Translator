@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Windows;
@@ -21,7 +22,7 @@ namespace LiveCaptionsTranslator
 
         private record Provider(string Name, string ApiUrl, string[] Models);
 
-        // Index matches the items of `ProviderBox`. The last one is "any OpenAI-compatible API".
+        // The first three items are built-in providers; saved slots follow them.
         private static readonly Provider[] PROVIDERS =
         {
             new("DeepSeek", "https://api.deepseek.com/chat/completions",
@@ -46,28 +47,32 @@ namespace LiveCaptionsTranslator
         private bool initializing = true;
         private bool fillingKeyBox = false;
 
-        private static OpenAIConfig? ApiConfig => Translator.Setting[Summarizer.SUMMARY_API] as OpenAIConfig;
+        private static OpenAIConfig? ApiConfig => Summarizer.Config;
+
+        // The config object currently bound to card ①, so event handlers can be swapped on slot change.
+        private OpenAIConfig? subscribedConfig;
+        private const string FOLLOW_TRANSLATION = "（跟随翻译档位）";
+        private bool fillingProviderBox;
+        private readonly List<System.Windows.Controls.Button> providerActions = new();
 
         public LecturePage()
         {
             InitializeComponent();
-            ApplicationThemeManager.ApplySystemTheme();
+            MainWindow.ApplySavedTheme();
             DataContext = Translator.Setting.Lecture;
-            ApiCard.DataContext = ApiConfig;
             ScrollHelper.UseOwnScrollViewer(this, PageScroll);
 
             Loaded += (s, e) =>
             {
                 (App.Current.MainWindow as MainWindow)?.AutoHeightAdjust(minHeight: MIN_HEIGHT);
                 Summarizer.CurrentPageChanged += OnCurrentPageChanged;
-                if (ApiConfig != null)
-                    ApiConfig.PropertyChanged += OnApiConfigChanged;
+                BindApiCard();
                 initializing = true;
                 // One failing loader (e.g. an audio device that can't be read) must not leave the page read-only.
                 foreach (Action load in new Action[]
                          {
-                             LoadEngine, LoadApiSetting, LoadTranslateSetting, LoadDevices, LoadOcrLanguages, LoadVoices,
-                             ShowSlidesInfo, ShowLiveCaptionsState, ShowSaveFolder
+                             LoadEngine, () => LoadApiSetting(), LoadTranslateSetting, LoadDevices, LoadOcrLanguages, LoadVoices,
+                             ShowSlidesInfo, ShowLiveCaptionsState, ShowSaveFolder, LoadAppearance
                          })
                 {
                     try
@@ -84,13 +89,93 @@ namespace LiveCaptionsTranslator
             Unloaded += (s, e) =>
             {
                 Summarizer.CurrentPageChanged -= OnCurrentPageChanged;
-                if (ApiConfig != null)
-                    ApiConfig.PropertyChanged -= OnApiConfigChanged;
+                if (subscribedConfig != null)
+                {
+                    subscribedConfig.PropertyChanged -= OnApiConfigChanged;
+                    subscribedConfig = null;
+                }
                 initializing = true;
             };
         }
 
-        private void LoadApiSetting()
+        private void LoadAppearance()
+        {
+            var state = Translator.Setting.MainWindow;
+            ThemeBox.SelectedItem = ThemeBox.Items.Cast<ComboBoxItem>().FirstOrDefault(item =>
+                (string)item.Tag == state.Theme);
+            UiScaleSlider.Value = state.UiScale;
+        }
+
+        private void ThemeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (initializing || ThemeBox.SelectedItem is not ComboBoxItem item) return;
+            Translator.Setting.MainWindow.Theme = (string)item.Tag;
+            MainWindow.ApplySavedTheme();
+        }
+
+        private void UiScaleSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (initializing || App.Current.MainWindow is not MainWindow window) return;
+            Translator.Setting.MainWindow.UiScale = UiScaleSlider.Value;
+            window.SetUiScale(Translator.Setting.MainWindow.UiScale);
+        }
+
+        // Binds card ① to the slot used for summaries, which may differ from the translation slot.
+        private void BindApiCard()
+        {
+            var config = ApiConfig;
+            ApiCard.DataContext = config;
+            if (ReferenceEquals(subscribedConfig, config))
+                return;
+            if (subscribedConfig != null)
+                subscribedConfig.PropertyChanged -= OnApiConfigChanged;
+            subscribedConfig = config;
+            if (config != null)
+                config.PropertyChanged += OnApiConfigChanged;
+        }
+
+        // Lists named slots so summaries can use a different model from translation.
+        private void LoadSummarySlots()
+        {
+            var setting = Translator.Setting;
+            if (setting == null)
+                return;
+
+            var names = setting.OpenAIConfigs
+                .Select(slot => slot.ConfigName?.Trim() ?? string.Empty)
+                .Where(name => name.Length > 0)
+                .ToList();
+
+            var items = new List<string> { FOLLOW_TRANSLATION };
+            items.AddRange(names);
+            SummaryConfigBox.ItemsSource = items;
+
+            string current = setting.Lecture?.SummaryConfigName?.Trim() ?? string.Empty;
+            SummaryConfigBox.SelectedItem = current.Length > 0 && names.Contains(current)
+                ? current
+                : FOLLOW_TRANSLATION;
+        }
+
+        private void SummaryConfigBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (initializing)
+                return;
+            var setting = Translator.Setting;
+            if (setting?.Lecture == null || SummaryConfigBox.SelectedItem is not string choice)
+                return;
+
+            string name = choice == FOLLOW_TRANSLATION ? string.Empty : choice;
+            if (string.Equals(setting.Lecture.SummaryConfigName, name, StringComparison.Ordinal))
+                return;
+
+            setting.Lecture.SummaryConfigName = name;
+            setting.Save();
+            BindApiCard();
+            LoadApiSetting();
+            TestApiResult.Text = string.Empty;
+        }
+
+        private void LoadApiSetting(bool refreshProviders = true)
         {
             var config = ApiConfig;
             if (config == null)
@@ -106,13 +191,20 @@ namespace LiveCaptionsTranslator
                     break;
                 }
             }
-            ProviderBox.SelectedIndex = index;
+            int savedIndex = Translator.Setting.OpenAIConfigs.ToList().IndexOf(config);
+            if (refreshProviders)
+                RefreshProviders(!string.IsNullOrWhiteSpace(config.ConfigName) && savedIndex >= 0
+                    ? PROVIDERS.Length + savedIndex : index);
             ModelBox.ItemsSource = PROVIDERS[index].Models;
             // Fill in DeepSeek defaults on first use.
             if (string.IsNullOrEmpty(config.ApiUrl))
                 ApplyProvider(PROVIDERS[index], config);
 
             FillKeyBox();
+            bool wasInitializing = initializing;
+            initializing = true;
+            try { LoadSummarySlots(); }
+            finally { initializing = wasInitializing; }
         }
 
         private void FillKeyBox()
@@ -141,19 +233,203 @@ namespace LiveCaptionsTranslator
         private static void ApplyProvider(Provider provider, OpenAIConfig config)
         {
             if (!string.IsNullOrEmpty(provider.ApiUrl))
+            {
                 config.ApiUrl = provider.ApiUrl;
+                config.ApiStyle = "standard";
+            }
             if (provider.Models.Length > 0 && !provider.Models.Contains(config.ModelName))
                 config.ModelName = provider.Models[0];
         }
 
         private void ProviderBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (initializing || ProviderBox.SelectedIndex < 0 || ApiConfig == null)
+            if (initializing || fillingProviderBox || ProviderBox.SelectedIndex < 0 || ApiConfig == null)
                 return;
+            if (ProviderBox.SelectedIndex >= PROVIDERS.Length)
+            {
+                var slots = Translator.Setting.OpenAIConfigs.ToList();
+                int slotIndex = ProviderBox.SelectedIndex - PROVIDERS.Length;
+                if (slotIndex >= slots.Count)
+                    return;
+                Translator.Setting.ConfigIndices[Summarizer.SUMMARY_API] = slotIndex;
+                Translator.Setting.Lecture.SummaryConfigName = string.Empty;
+                Translator.Setting.Save();
+                BindApiCard();
+                LoadApiSetting(false);
+                TestApiResult.Text = string.Empty;
+                return;
+            }
             var provider = PROVIDERS[ProviderBox.SelectedIndex];
+            if (!string.IsNullOrWhiteSpace(ApiConfig.ConfigName))
+            {
+                var draft = new OpenAIConfig { ApiKey = ApiConfig.ApiKey };
+                Translator.Setting.Configs[Summarizer.SUMMARY_API].Add(draft);
+                Translator.Setting.ConfigIndices[Summarizer.SUMMARY_API] = Translator.Setting.Configs[Summarizer.SUMMARY_API].Count - 1;
+                Translator.Setting.Lecture.SummaryConfigName = string.Empty;
+                BindApiCard();
+                RefreshProviders(ProviderBox.SelectedIndex);
+            }
             ModelBox.ItemsSource = provider.Models;
             ApplyProvider(provider, ApiConfig);
             TestApiResult.Text = string.Empty;
+        }
+
+        private void RefreshProviders(int selectedIndex)
+        {
+            fillingProviderBox = true;
+            try
+            {
+                providerActions.Clear();
+                while (ProviderBox.Items.Count > PROVIDERS.Length)
+                    ProviderBox.Items.RemoveAt(PROVIDERS.Length);
+                int position = 1;
+                foreach (var slot in Translator.Setting.OpenAIConfigs)
+                {
+                    int index = position - 1;
+                    string label = string.IsNullOrWhiteSpace(slot.ConfigName) ? $"配置 {position}" : slot.ConfigName.Trim();
+                    position++;
+                    var row = new StackPanel { Orientation = Orientation.Horizontal };
+                    row.Children.Add(new TextBlock { Text = label, MinWidth = 180, VerticalAlignment = VerticalAlignment.Center });
+                    foreach (var (symbol, action) in new[] { ("⬆", -1), ("⬇", 1), ("删除", 0) })
+                    {
+                        var button = new System.Windows.Controls.Button
+                        {
+                            Content = symbol, Tag = index, Margin = new Thickness(3, 0, 0, 0),
+                            Padding = new Thickness(5, 1, 5, 1),
+                            Visibility = ProviderBox.IsDropDownOpen ? Visibility.Visible : Visibility.Collapsed
+                        };
+                        button.Click += action == 0 ? DeleteProvider_click : action < 0 ? MoveProviderUp_click : MoveProviderDown_click;
+                        row.Children.Add(button);
+                        providerActions.Add(button);
+                    }
+                    ProviderBox.Items.Add(new ComboBoxItem { Content = row });
+                }
+                ProviderBox.SelectedIndex = selectedIndex;
+            }
+            finally { fillingProviderBox = false; }
+        }
+
+        private void ProviderBox_DropDownOpened(object sender, EventArgs e)
+        {
+            foreach (var button in providerActions) button.Visibility = Visibility.Visible;
+        }
+        private void ProviderBox_DropDownClosed(object sender, EventArgs e)
+        {
+            foreach (var button in providerActions) button.Visibility = Visibility.Collapsed;
+        }
+
+        private void DeleteProvider_click(object sender, RoutedEventArgs e)
+        {
+            int index = (sender as System.Windows.Controls.Button)?.Tag is int slotIndex ? slotIndex : -1;
+            var slots = Translator.Setting.Configs[Summarizer.SUMMARY_API];
+            if (index < 0 || index >= slots.Count || slots.Count <= 1) return;
+            if (MessageBox.Show($"删除配置“{slots[index].ConfigName}”？", "删除配置",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            string name = slots[index].ConfigName;
+            slots.RemoveAt(index);
+            int current = Translator.Setting.ConfigIndices[Summarizer.SUMMARY_API];
+            Translator.Setting.ConfigIndices[Summarizer.SUMMARY_API] = current == index
+                ? Math.Min(index, slots.Count - 1) : current > index ? current - 1 : current;
+            if (Translator.Setting.Lecture.SummaryConfigName == name)
+                Translator.Setting.Lecture.SummaryConfigName = string.Empty;
+            Translator.Setting.Save();
+            BindApiCard();
+            LoadApiSetting();
+            TestApiResult.Text = string.Empty;
+        }
+
+        private void MoveProviderUp_click(object sender, RoutedEventArgs e) => MoveProvider(sender, -1);
+        private void MoveProviderDown_click(object sender, RoutedEventArgs e) => MoveProvider(sender, 1);
+
+        private void MoveProvider(object sender, int direction)
+        {
+            int index = (sender as System.Windows.Controls.Button)?.Tag is int slotIndex ? slotIndex : -1;
+            var slots = Translator.Setting.Configs[Summarizer.SUMMARY_API];
+            int target = index + direction;
+            if (index < 0 || target < 0 || target >= slots.Count) return;
+            int selected = ProviderBox.SelectedIndex;
+            if (selected == PROVIDERS.Length + index) selected = PROVIDERS.Length + target;
+            else if (selected == PROVIDERS.Length + target) selected = PROVIDERS.Length + index;
+            (slots[index], slots[target]) = (slots[target], slots[index]);
+            int current = Translator.Setting.ConfigIndices[Summarizer.SUMMARY_API];
+            if (current == index) Translator.Setting.ConfigIndices[Summarizer.SUMMARY_API] = target;
+            else if (current == target) Translator.Setting.ConfigIndices[Summarizer.SUMMARY_API] = index;
+            Translator.Setting.Save();
+            RefreshProviders(selected);
+            ProviderBox.IsDropDownOpen = true;
+        }
+
+        private void RefreshAsrModels()
+        {
+            AsrModelBox.ItemsSource = null;
+            AsrModelBox.ItemsSource = Translator.Setting.Lecture.AsrModels;
+            AsrModelBox.Text = Translator.Setting.Lecture.AsrModel;
+        }
+
+        private void DeleteAsrModel_click(object sender, RoutedEventArgs e)
+        {
+            var lecture = Translator.Setting.Lecture;
+            string model = AsrModelBox.Text?.Trim() ?? string.Empty;
+            if (!lecture.AsrModels.Remove(model)) return;
+            if (lecture.AsrModel == model)
+                lecture.AsrModel = lecture.AsrModels.FirstOrDefault() ?? LectureState.DEFAULT_ASR_MODEL;
+            RefreshAsrModels();
+            Translator.Setting.Save();
+        }
+
+        private void MoveAsrModelUp_click(object sender, RoutedEventArgs e) => MoveAsrModel(-1);
+        private void MoveAsrModelDown_click(object sender, RoutedEventArgs e) => MoveAsrModel(1);
+
+        private void MoveAsrModel(int direction)
+        {
+            var models = Translator.Setting.Lecture.AsrModels;
+            int index = models.FindIndex(m => string.Equals(m, AsrModelBox.Text?.Trim(), StringComparison.OrdinalIgnoreCase));
+            int target = index + direction;
+            if (index < 0 || target < 0 || target >= models.Count) return;
+            (models[index], models[target]) = (models[target], models[index]);
+            RefreshAsrModels();
+            Translator.Setting.Save();
+        }
+
+        private void OpenAsrQuota_click(object sender, RoutedEventArgs e) =>
+            Process.Start(new ProcessStartInfo("https://bailian.console.aliyun.com/cn-beijing/costing-balance/free-quota?model=asr")
+                { UseShellExecute = true });
+
+        private void SaveApiConfig_click(object sender, RoutedEventArgs e)
+        {
+            ApiUrlBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            ModelBox.GetBindingExpression(ComboBox.TextProperty)?.UpdateSource();
+            var current = ApiConfig;
+            if (current == null || string.IsNullOrWhiteSpace(current.ApiUrl) || string.IsNullOrWhiteSpace(current.ModelName))
+            {
+                TestApiResult.Text = "请先填写 API 地址和模型。";
+                return;
+            }
+            string? name = NameConfigDialog.Ask(Window.GetWindow(this), "保存模型配置", current.ConfigName);
+            if (name == null) return;
+            name = name.Trim();
+            if (name.Length == 0 || Translator.Setting.OpenAIConfigs.Any(c =>
+                    string.Equals(c.ConfigName, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                TestApiResult.Text = "配置名称不能为空，也不能与已有配置重名。";
+                return;
+            }
+            var saved = new OpenAIConfig
+            {
+                ConfigName = name, ApiUrl = current.ApiUrl, ApiKey = current.ApiKey,
+                ModelName = current.ModelName, Temperature = current.Temperature,
+                ApiStyle = current.ApiStyle, SourceLanguage = current.SourceLanguage,
+                GlossaryTerms = current.GlossaryTerms
+            };
+            Translator.Setting.Configs[Summarizer.SUMMARY_API].Add(saved);
+            Translator.Setting.ConfigIndices[Summarizer.SUMMARY_API] = Translator.Setting.Configs[Summarizer.SUMMARY_API].Count - 1;
+            Translator.Setting.Lecture.SummaryConfigName = string.Empty;
+            Translator.Setting.Save();
+            BindApiCard();
+            RefreshProviders(PROVIDERS.Length + Translator.Setting.OpenAIConfigs.ToList().IndexOf(saved));
+            FillKeyBox();
+            LoadSummarySlots();
+            TestApiResult.Text = $"已保存配置：{name}";
         }
 
         // Saved on every keystroke / paste, independent of the page state, so the key can't be lost
@@ -321,12 +597,22 @@ namespace LiveCaptionsTranslator
 
         private async void TestAsr_click(object sender, RoutedEventArgs e)
         {
+            AsrModelBox.GetBindingExpression(ComboBox.TextProperty)?.UpdateSource();
+            AsrEndpointBox.GetBindingExpression(System.Windows.Controls.TextBox.TextProperty)?.UpdateSource();
             TestAsrButton.IsEnabled = false;
             TestAsrResult.Text = "测试中……";
             try
             {
                 string? note = await CloudAsr.Test();
                 TestAsrResult.Text = note == null ? "✓ 连接成功" : $"✓ 连接成功（{note}）";
+                var lecture = Translator.Setting.Lecture;
+                string model = lecture.AsrModel.Trim();
+                if (!lecture.AsrModels.Any(saved => string.Equals(saved, model, StringComparison.OrdinalIgnoreCase)))
+                {
+                    lecture.AsrModels.Add(model);
+                    RefreshAsrModels();
+                    Translator.Setting.Save();
+                }
             }
             catch (Exception ex)
             {
@@ -464,8 +750,7 @@ namespace LiveCaptionsTranslator
             TestApiResult.Text = "测试中……";
             try
             {
-                await Summarizer.TestConnection();
-                TestApiResult.Text = "✓ 连接成功";
+                TestApiResult.Text = await Summarizer.TestConnection(ApiConfig);
             }
             catch (Exception ex)
             {

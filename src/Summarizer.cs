@@ -345,7 +345,7 @@ namespace LiveCaptionsTranslator
         private static async Task<string> Summarize(List<HistoryLine> lines, int? page, LectureState lecture)
         {
             string language = LectureState.OutputLanguage();
-            string system = string.Format(lecture.SummaryPrompt, language) + LectureState.EnglishOnlyHint() +
+            string system = string.Format(lecture.SummaryPrompt, language) + LectureState.NATURAL_NOTES_HINT + LectureState.EnglishOnlyHint() +
                             LectureState.SubjectHint();
             var slide = SlideDeck.GetPage(page);
             if (slide != null)
@@ -358,16 +358,88 @@ namespace LiveCaptionsTranslator
             return await Chat(system, transcript.ToString(), maxTokens: 600, temperature: 0.3);
         }
 
-        public static Task<string> TestConnection() =>
-            Chat("Reply with the single word OK.", "ping", maxTokens: 16, temperature: 0);
+        // Probe translation-only configurations with a translation request.
+        public static async Task<string> TestConnection(OpenAIConfig? selectedConfig = null)
+        {
+            var config = selectedConfig ?? Config;
+            if (config == null || string.IsNullOrWhiteSpace(config.ApiUrl))
+                throw new InvalidOperationException("请先填好接口地址、密钥和模型。");
+
+            if (IsTranslateOnly(config))
+            {
+                string translated = await TranslateProbe(config);
+                return $"✓ 连接正常（{Describe(config)}）：“Good morning.” → {translated}\n⚠ {TRANSLATE_ONLY_HINT}";
+            }
+
+            string reply = await Chat("Reply with the single word OK.", "ping", maxTokens: 64, temperature: 0, selectedConfig: config);
+            return $"✓ 连接正常（{Describe(config)}），模型回复：{reply}";
+        }
+
+        // Translation-only protocol: one user message plus translation_options.
+        private static async Task<string> TranslateProbe(OpenAIConfig config)
+        {
+            var requestData = new Dictionary<string, object>
+            {
+                ["model"] = config.ModelName,
+                ["messages"] = new List<BaseLLMConfig.Message>
+                {
+                    new BaseLLMConfig.Message { role = "user", content = "Good morning." }
+                },
+                ["translation_options"] = new
+                {
+                    source_lang = string.IsNullOrWhiteSpace(config.SourceLanguage) ? "auto" : config.SourceLanguage.Trim(),
+                    target_lang = "Chinese"
+                }
+            };
+
+            using var response = await Post(config, requestData);
+            string body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                string snippet = body.Length > 200 ? body[..200] + "…" : body;
+                throw new HttpRequestException(
+                    $"HTTP {(int)response.StatusCode} {response.StatusCode}：{snippet}", null, response.StatusCode);
+            }
+
+            var responseObj = JsonSerializer.Deserialize<OpenAIConfig.Response>(body);
+            string output = responseObj?.choices?.FirstOrDefault()?.message?.content?.Trim() ?? string.Empty;
+            return string.IsNullOrEmpty(output) ? "(空回复)" : output;
+        }
+
+        // Summaries may use a different slot from translation-only configurations.
+        public static OpenAIConfig? Config
+        {
+            get
+            {
+                var setting = Translator.Setting;
+                if (setting == null)
+                    return null;
+                return setting.GetOpenAIConfig(setting.Lecture?.SummaryConfigName)
+                       ?? setting[SUMMARY_API] as OpenAIConfig;
+            }
+        }
+
+        private static bool IsTranslateOnly(OpenAIConfig? config) =>
+            string.Equals(config?.ApiStyle, "qwen-mt", StringComparison.OrdinalIgnoreCase);
+
+        private static string Describe(OpenAIConfig config)
+        {
+            string model = string.IsNullOrWhiteSpace(config.ModelName) ? "未填模型" : config.ModelName;
+            return string.IsNullOrWhiteSpace(config.ConfigName) ? model : $"{config.ConfigName} / {model}";
+        }
+
+        private const string TRANSLATE_ONLY_HINT =
+            "此配置使用翻译专用协议，不能做小节总结。请为摘要选择支持对话的模型配置。";
 
         internal static async Task<string> Chat(string system, string user, int maxTokens, double temperature,
-            bool json = false, bool longRequest = false)
+            bool json = false, bool longRequest = false, OpenAIConfig? selectedConfig = null)
         {
-            var config = Translator.Setting[SUMMARY_API] as OpenAIConfig;
+            var config = selectedConfig ?? Config;
             if (config == null || string.IsNullOrWhiteSpace(config.ApiUrl))
                 throw new InvalidOperationException(
                     "请先在 API 设置的 \"OpenAI\" 一项里填好接口地址、密钥和模型（例如 DeepSeek）。");
+            if (IsTranslateOnly(config))
+                throw new InvalidOperationException($"小节总结模型「{Describe(config)}」不可用：{TRANSLATE_ONLY_HINT}");
 
             var requestData = new Dictionary<string, object>
             {

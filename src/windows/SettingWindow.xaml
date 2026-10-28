@@ -524,6 +524,16 @@
                                                     VerticalAlignment="Center"
                                                     FontWeight="Bold"
                                                     Text="当前配置：" />
+                                                <ComboBox
+                                                    x:Name="OpenAIConfigComboBox"
+                                                    Width="180"
+                                                    Height="30"
+                                                    Margin="0,0,10,0"
+                                                    Padding="10,4,10,7"
+                                                    VerticalContentAlignment="Center"
+                                                    DisplayMemberPath="Label"
+                                                    SelectionChanged="ConfigComboBox_SelectionChanged"
+                                                    Tag="OpenAI" />
                                                 <ui:Button
                                                     Margin="0,0,10,0"
                                                     Padding="8,4,8,4"
@@ -539,6 +549,12 @@
                                                     Padding="8,4,8,4"
                                                     Click="NextButton_Click"
                                                     Icon="{ui:SymbolIcon chevronRight12}"
+                                                    Tag="OpenAI" />
+                                                <ui:Button
+                                                    Margin="10,0,0,0"
+                                                    Padding="8,4,8,4"
+                                                    Click="RenameConfigButton_Click"
+                                                    Content="命名"
                                                     Tag="OpenAI" />
                                             </StackPanel>
                                             <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
@@ -563,6 +579,7 @@
                                         <Separator Margin="0,0,0,10" />
                                         <Grid x:Name="OpenAIGrid">
                                             <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
                                                 <RowDefinition Height="Auto" />
                                                 <RowDefinition Height="Auto" />
                                             </Grid.RowDefinitions>
@@ -650,6 +667,62 @@
                                                     Padding="10,4,10,7"
                                                     FontSize="13.3"
                                                     Text="{Binding [OpenAI].ApiKey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+                                            <StackPanel
+                                                Grid.Row="2"
+                                                Grid.Column="0"
+                                                Margin="15,10,0,0"
+                                                Orientation="Vertical">
+                                                <StackPanel VerticalAlignment="Center" Orientation="Horizontal">
+                                                    <ui:TextBlock Margin="2.5,0,0,5" Text="接口类型" />
+                                                    <ui:Flyout x:Name="OpenAIApiStyleInfoFlyout">
+                                                        <ui:TextBlock Width="320" TextWrapping="Wrap">
+                                                            <Run Text="普通对话模型（如 DeepSeek、GPT、GLM）用" />
+                                                            <Run FontWeight="Bold" Text="“标准对话协议”" />
+                                                            <Run Text="；需要翻译专用协议的模型拒绝 system 消息时，请选择" />
+                                                            <Run FontWeight="Bold" Text="“Qwen-MT 翻译协议”" />
+                                                            <Run Text="，语言与指令通过 translation_options 传递。" />
+                                                        </ui:TextBlock>
+                                                    </ui:Flyout>
+                                                    <Button
+                                                        Width="15"
+                                                        Height="15"
+                                                        Margin="-5,-3,0,0"
+                                                        Padding="0"
+                                                        Background="Transparent"
+                                                        BorderThickness="0"
+                                                        MouseEnter="APIUrlInfo_MouseEnter"
+                                                        MouseLeave="APIUrlInfo_MouseLeave">
+                                                        <ui:SymbolIcon Symbol="Info16" />
+                                                    </Button>
+                                                </StackPanel>
+                                                <ComboBox
+                                                    x:Name="OpenAIApiStyleComboBox"
+                                                    Width="130"
+                                                    Height="30"
+                                                    Padding="10,4,10,7"
+                                                    FontSize="13.3"
+                                                    VerticalContentAlignment="Center"
+                                                    SelectedValuePath="Tag"
+                                                    SelectionChanged="ApiStyleComboBox_SelectionChanged"
+                                                    Tag="OpenAI">
+                                                    <ComboBoxItem Content="标准对话协议" Tag="standard" />
+                                                    <ComboBoxItem Content="Qwen-MT 翻译协议" Tag="qwen-mt" />
+                                                </ComboBox>
+                                            </StackPanel>
+                                            <StackPanel
+                                                Grid.Row="2"
+                                                Grid.Column="1"
+                                                Margin="15,10,0,0"
+                                                Orientation="Vertical">
+                                                <ui:TextBlock Margin="2.5,0,0,5" Text="源语种（仅 Qwen-MT 生效）" />
+                                                <ui:TextBox
+                                                    Width="200"
+                                                    Height="30"
+                                                    Padding="10,4,10,7"
+                                                    FontSize="13.3"
+                                                    ToolTip="auto 表示自动检测；也可填 en、zh 等代码。"
+                                                    Text="{Binding [OpenAI].SourceLanguage, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                             </StackPanel>
                                         </Grid>
                                     </StackPanel>

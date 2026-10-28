@@ -1,5 +1,6 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
+using System.IO;
 using System.Windows.Input;
 using Microsoft.Win32;
 using Wpf.Ui.Appearance;
@@ -22,6 +23,8 @@ namespace LiveCaptionsTranslator
         private View view = View.Courses;
         private CourseEntry? currentCourse = null;
         private LectureRecord? currentLecture = null;
+        private readonly HashSet<long> selectedCourses = new();
+        private readonly HashSet<long> selectedLectures = new();
 
         private int currentPage = 1;
         private int searchPage = 1;
@@ -33,7 +36,7 @@ namespace LiveCaptionsTranslator
         public HistoryPage()
         {
             InitializeComponent();
-            ApplicationThemeManager.ApplySystemTheme();
+            MainWindow.ApplySavedTheme();
 
             ScrollHelper.UseOwnScrollViewer(this, CourseScroll, LectureScroll, DetailScroll);
             Loaded += async (s, e) =>
@@ -84,10 +87,12 @@ namespace LiveCaptionsTranslator
             NotesDraft.Visibility = RenameLecture.Visibility;
             Export.Visibility = view == View.All ? Visibility.Visible : Visibility.Collapsed;
             Delete.Visibility = Export.Visibility;
+            DeleteSelected.Visibility = view == View.Detail ? Visibility.Collapsed : Visibility.Visible;
         }
 
         private async Task ShowCourses()
         {
+            selectedCourses.Clear();
             currentCourse = null;
             currentLecture = null;
             SetView(View.Courses);
@@ -105,6 +110,7 @@ namespace LiveCaptionsTranslator
 
         private async Task ShowLectures(CourseEntry course)
         {
+            selectedLectures.Clear();
             currentCourse = course;
             currentLecture = null;
             SetView(View.Lectures);
@@ -169,6 +175,89 @@ namespace LiveCaptionsTranslator
 
         private static T? MenuTarget<T>(object sender) where T : class =>
             (sender as MenuItem)?.DataContext as T;
+
+        private void CourseChecked(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.DataContext is CourseEntry course) selectedCourses.Add(course.Id);
+        }
+        private void CourseUnchecked(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.DataContext is CourseEntry course) selectedCourses.Remove(course.Id);
+        }
+        private void LectureChecked(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.DataContext is LectureRecord lecture) selectedLectures.Add(lecture.Id);
+        }
+        private void LectureUnchecked(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.DataContext is LectureRecord lecture) selectedLectures.Remove(lecture.Id);
+        }
+
+        private async void DeleteSelected_click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (ClassSession.IsRunning)
+                {
+                    SnackbarHost.Show("正在录制时不能批量删除。", "请先点“停止”。", SnackbarType.Warning, timeout: 2);
+                    return;
+                }
+                if (view == View.All)
+                {
+                    var ids = HistoryDataGrid.SelectedItems.Cast<TranslationHistoryEntry>().Select(row => row.Id).ToArray();
+                    if (ids.Length == 0 || !await Confirm($"删除选中的 {ids.Length} 条句子？",
+                            "只删除所选历史句子，不删除整节课或已保存文件。", "删除")) return;
+                    await SQLiteHistoryLogger.DeleteRows(ids);
+                    await LoadHistory();
+                    return;
+                }
+
+                var lectures = new List<LectureRecord>();
+                var courses = new List<CourseEntry>();
+                if (view == View.Courses)
+                {
+                    courses = (CourseList.ItemsSource as IEnumerable<CourseEntry>)?.Where(c => selectedCourses.Contains(c.Id)).ToList() ?? new();
+                    foreach (var course in courses)
+                        lectures.AddRange(await LectureStore.LoadLectures(course.Id));
+                }
+                else if (view == View.Lectures)
+                    lectures = (LectureList.ItemsSource as IEnumerable<LectureRecord>)?.Where(l => selectedLectures.Contains(l.Id)).ToList() ?? new();
+
+                if (lectures.Count == 0 && courses.Count == 0) return;
+                if (!await Confirm($"删除选中的 {courses.Count} 门课程、{lectures.Count} 节课？",
+                        "原文、译文、小节总结及对应的已保存转录和笔记文件将删除。此操作无法撤销。", "删除")) return;
+
+                int filesLeft = 0;
+                foreach (var lecture in lectures)
+                {
+                    await LectureStore.DeleteLecture(lecture);
+                    if (string.IsNullOrWhiteSpace(lecture.FilePath)) continue;
+                    string root = Path.GetFullPath(LectureDocument.SaveFolder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                    string path = Path.GetFullPath(lecture.FilePath);
+                    if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) { filesLeft++; continue; }
+                    foreach (string file in new[] { path, LectureNotes.DraftPath(lecture) })
+                    {
+                        try { if (File.Exists(file)) File.Delete(file); }
+                        catch (IOException) { filesLeft++; }
+                        catch (UnauthorizedAccessException) { filesLeft++; }
+                    }
+                }
+                foreach (var course in courses)
+                {
+                    await LectureStore.DeleteCourse(course.Id);
+                    if (Translator.Setting.Lecture.CurrentCourse == course.Name)
+                        Translator.Setting.Lecture.CurrentCourse = string.Empty;
+                }
+                if (filesLeft > 0)
+                    SnackbarHost.Show("部分文件仍保留。", $"{filesLeft} 个文件不在当前保存目录或无法删除，请手动检查。", SnackbarType.Warning, timeout: 5);
+                if (view == View.Courses) await ShowCourses();
+                else if (currentCourse != null) await ShowLectures(currentCourse);
+            }
+            catch (Exception ex)
+            {
+                SnackbarHost.Show("批量删除失败。", ex.Message, SnackbarType.Error, timeout: 5, closeButton: true);
+            }
+        }
 
         private async void NewCourse_click(object sender, RoutedEventArgs e)
         {

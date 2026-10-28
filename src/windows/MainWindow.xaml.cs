@@ -1,6 +1,7 @@
 ﻿using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Input;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
 
@@ -32,7 +33,8 @@ namespace LiveCaptionsTranslator
         public MainWindow()
         {
             InitializeComponent();
-            ApplicationThemeManager.ApplySystemTheme();
+            ApplySavedTheme();
+            SetUiScale(Translator.Setting.MainWindow.UiScale);
 
             SourceInitialized += (s, e) => RegisterHotKeys();
             Closed += (s, e) =>
@@ -45,7 +47,8 @@ namespace LiveCaptionsTranslator
 
             Loaded += (s, e) =>
             {
-                SystemThemeWatcher.Watch(this, WindowBackdropType.Mica, true);
+                if (Translator.Setting.MainWindow.Theme == "System")
+                    SystemThemeWatcher.Watch(this, WindowBackdropType.Mica, true);
                 RootNavigation.Navigate(typeof(CaptionPage));
                 CheckForFirstUse();
             };
@@ -70,6 +73,38 @@ namespace LiveCaptionsTranslator
             ToggleTopmost(Translator.Setting.MainWindow.Topmost);
             ShowSpeakerState(Speaker.Muted);
             ShowLogCard(Translator.Setting.MainWindow.CaptionLogEnabled);
+        }
+
+        public static void ApplySavedTheme()
+        {
+            string theme = Translator.Setting?.MainWindow.Theme ?? "System";
+            if (theme == "System")
+            {
+                ApplicationThemeManager.ApplySystemTheme();
+                if (Application.Current.MainWindow is MainWindow main && main.IsLoaded)
+                    SystemThemeWatcher.Watch(main, WindowBackdropType.Mica, true);
+            }
+            else
+            {
+                foreach (Window window in Application.Current.Windows)
+                    SystemThemeWatcher.UnWatch(window);
+                ApplicationThemeManager.Apply(theme == "Dark" ? ApplicationTheme.Dark : ApplicationTheme.Light);
+            }
+        }
+
+        public void SetUiScale(double scale)
+        {
+            UiScaleTransform.ScaleX = scale;
+            UiScaleTransform.ScaleY = scale;
+        }
+
+        private void MainWindow_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
+            var state = Translator.Setting.MainWindow;
+            state.UiScale = Math.Round(state.UiScale + Math.Sign(e.Delta) * 0.05, 2);
+            SetUiScale(state.UiScale);
+            e.Handled = true;
         }
 
         private void TopmostButton_Click(object sender, RoutedEventArgs e)

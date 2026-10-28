@@ -12,15 +12,12 @@ namespace LiveCaptionsTranslator
         public WelcomeWindow()
         {
             InitializeComponent();
-            ApplicationThemeManager.ApplySystemTheme();
+            MainWindow.ApplySavedTheme();
 
             Loaded += (s, e) =>
             {
-                SystemThemeWatcher.Watch(
-                    this,
-                    WindowBackdropType.Mica,
-                    true
-                );
+                if (Translator.Setting.MainWindow.Theme == "System")
+                    SystemThemeWatcher.Watch(this, WindowBackdropType.Mica, true);
             };
         }
 

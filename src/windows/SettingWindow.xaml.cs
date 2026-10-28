@@ -21,12 +21,13 @@ namespace LiveCaptionsTranslator
         public SettingWindow()
         {
             InitializeComponent();
-            ApplicationThemeManager.ApplySystemTheme();
+            MainWindow.ApplySavedTheme();
             DataContext = Translator.Setting;
 
             Loaded += (sender, args) =>
             {
-                SystemThemeWatcher.Watch(this, WindowBackdropType.Mica, true);
+                if (Translator.Setting.MainWindow.Theme == "System")
+                    SystemThemeWatcher.Watch(this, WindowBackdropType.Mica, true);
                 Initialize();
                 SelectButton(PromptButton);
             };
@@ -62,6 +63,16 @@ namespace LiveCaptionsTranslator
                 SwitchConfig(apiName, configIndex + 1);
 
                 Translator.Setting.OnPropertyChanged("Configs");
+
+                // Ask for a name right away so the new slot is identifiable in the drop-down.
+                string newName = NameConfigDialog.Ask(this, "命名配置", "");
+                if (newName != null)
+                {
+                    configs[configIndex + 1].ConfigName = newName;
+                    configs[configIndex + 1].OnPropertyChanged("ConfigName");
+                    RefreshConfigComboBox(apiName);
+                    Translator.Setting.Save();
+                }
             }
         }
 
@@ -195,14 +206,167 @@ namespace LiveCaptionsTranslator
                 int total = Translator.Setting.Configs[apiName].Count;
                 indexTextBlock.Text = $"{index + 1}/{total}";
             }
+            RefreshConfigComboBox(apiName);
+            SyncApiStyleComboBox(apiName);
             Translator.Setting.OnPropertyChanged(null);
+        }
+
+        /// <summary>
+        /// Item shown in the configuration picker: the slot name plus its position, so that
+        /// unnamed slots are still distinguishable.
+        /// </summary>
+        public class ConfigSlotItem
+        {
+            public int Index { get; set; }
+            public string Label { get; set; } = "";
+            public override string ToString() => Label;
+        }
+
+        /// <summary>
+        /// Rebuilds the drop-down that lists every saved configuration of one API type.
+        /// The item source is replaced, so the selection is restored afterwards to avoid
+        /// triggering a spurious switch.
+        /// </summary>
+        private void RefreshConfigComboBox(string apiName)
+        {
+            var comboBox = FindName($"{apiName}ConfigComboBox") as ComboBox;
+            if (comboBox == null)
+                return;
+
+            var configs = Translator.Setting.Configs[apiName];
+            int current = Translator.Setting.ConfigIndices[apiName];
+            if (current < 0 || current >= configs.Count)
+                current = 0;
+
+            var items = new List<ConfigSlotItem>();
+            for (int i = 0; i < configs.Count; i++)
+            {
+                string name = configs[i].ConfigName;
+                string label = string.IsNullOrWhiteSpace(name)
+                    ? $"配置 {i + 1}"
+                    : $"{name}";
+                items.Add(new ConfigSlotItem { Index = i, Label = label });
+            }
+
+            bool wasUpdating = isRefreshingComboBox;
+            isRefreshingComboBox = true;
+            try
+            {
+                comboBox.ItemsSource = items;
+                comboBox.SelectedIndex = current;
+            }
+            finally
+            {
+                isRefreshingComboBox = wasUpdating;
+            }
+        }
+
+        private bool isRefreshingComboBox = false;
+
+        private void ConfigComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (isRefreshingComboBox)
+                return;
+            if (sender is not ComboBox comboBox)
+                return;
+            if (comboBox.Tag is not string apiName)
+                return;
+            if (comboBox.SelectedItem is not ConfigSlotItem item)
+                return;
+
+            SwitchConfig(apiName, item.Index);
+        }
+
+        private void RenameConfigButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not System.Windows.Controls.Button button)
+                return;
+            if (button.Tag is not string apiName)
+                return;
+
+            var configs = Translator.Setting.Configs[apiName];
+            int index = Translator.Setting.ConfigIndices[apiName];
+            if (index < 0 || index >= configs.Count)
+                return;
+
+            string current = configs[index].ConfigName ?? "";
+            string newName = NameConfigDialog.Ask(this, "命名配置", current);
+            if (newName == null)
+                return;
+
+            configs[index].ConfigName = newName;
+            configs[index].OnPropertyChanged("ConfigName");
+            RefreshConfigComboBox(apiName);
+            Translator.Setting.Save();
+        }
+
+        private void ApiStyleComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (isRefreshingComboBox)
+                return;
+            if (sender is not ComboBox comboBox)
+                return;
+            if (comboBox.Tag is not string apiName)
+                return;
+            if (comboBox.SelectedItem is not ComboBoxItem item)
+                return;
+
+            string style = item.Tag as string;
+            if (string.IsNullOrEmpty(style))
+                return;
+
+            if (Translator.Setting[apiName] is OpenAIConfig config && config.ApiStyle != style)
+            {
+                config.ApiStyle = style;
+                Translator.Setting.Save();
+            }
+        }
+
+        /// <summary>
+        /// Keeps the "接口类型" combo in sync with the stored configuration when the slot
+        /// changes, without re-triggering its own selection handler.
+        /// </summary>
+        private void SyncApiStyleComboBox(string apiName)
+        {
+            var comboBox = FindName($"{apiName}ApiStyleComboBox") as ComboBox;
+            if (comboBox == null)
+                return;
+            if (Translator.Setting[apiName] is not OpenAIConfig config)
+                return;
+
+            bool wasUpdating = isRefreshingComboBox;
+            isRefreshingComboBox = true;
+            try
+            {
+                for (int i = 0; i < comboBox.Items.Count; i++)
+                {
+                    if (comboBox.Items[i] is ComboBoxItem item && item.Tag as string == config.ApiStyle)
+                    {
+                        comboBox.SelectedIndex = i;
+                        return;
+                    }
+                }
+            }
+            finally
+            {
+                isRefreshingComboBox = wasUpdating;
+            }
         }
 
         private void SelectButton(System.Windows.Controls.Button button)
         {
             if (currentSelected != null)
                 currentSelected.Background = Brushes.Transparent;
-            button.Background = (Brush)FindResource("ControlFillColorSecondaryBrush");
+            // The theme brush is not present when the window is rendered outside a themed
+            // application, so fall back to a neutral highlight instead of throwing.
+            try
+            {
+                button.Background = (Brush)FindResource("ControlFillColorSecondaryBrush");
+            }
+            catch (Exception)
+            {
+                button.Background = new SolidColorBrush(Color.FromArgb(32, 128, 128, 128));
+            }
             currentSelected = button;
         }
     }

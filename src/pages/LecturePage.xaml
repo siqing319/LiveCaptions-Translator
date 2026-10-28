@@ -46,11 +46,13 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <!--  Left column: input, model / API  -->
-            <StackPanel Grid.Row="0" Grid.Column="0">
-                <Border Style="{StaticResource Card}">
+            <Grid Grid.Row="0" Grid.Column="0">
+                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                <Border Grid.Row="0" Style="{StaticResource Card}">
                     <StackPanel>
                         <TextBlock Style="{StaticResource CardTitle}" Text="⓪ 输入源" />
 
@@ -82,12 +84,16 @@
                             <Expander Margin="0,8,0,0" Header="高级：模型和接口地址">
                                 <StackPanel Margin="0,6,0,0">
                                     <TextBlock Style="{StaticResource Label}" Text="识别模型" />
-                                    <ComboBox IsEditable="True" Text="{Binding AsrModel, Mode=TwoWay, UpdateSourceTrigger=LostFocus}">
-                                        <ComboBoxItem Content="paraformer-realtime-v2" />
-                                        <ComboBoxItem Content="fun-asr-realtime" />
-                                    </ComboBox>
+                                    <ComboBox x:Name="AsrModelBox" IsEditable="True" ItemsSource="{Binding AsrModels}"
+                                              Text="{Binding AsrModel, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
+                                    <StackPanel Margin="0,5,0,0" Orientation="Horizontal">
+                                        <ui:Button Click="DeleteAsrModel_click" Content="删除模型" />
+                                        <ui:Button Margin="5,0,0,0" Click="MoveAsrModelUp_click" Content="⬆" />
+                                        <ui:Button Margin="5,0,0,0" Click="MoveAsrModelDown_click" Content="⬇" />
+                                        <ui:Button Margin="10,0,0,0" Click="OpenAsrQuota_click" Content="查看百炼用量" />
+                                    </StackPanel>
                                     <TextBlock Style="{StaticResource Label}" Text="接口地址" />
-                                    <ui:TextBox Text="{Binding AsrEndpoint, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
+                                    <ui:TextBox x:Name="AsrEndpointBox" Text="{Binding AsrEndpoint, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
                                     <TextBlock Style="{StaticResource Hint}" Text="国内账号保持默认；国际站账号改成 wss://dashscope-intl.aliyuncs.com/api-ws/v1/inference。" />
                                 </StackPanel>
                             </Expander>
@@ -139,16 +145,20 @@
                     </StackPanel>
                 </Border>
 
-                <Border x:Name="ApiCard" Style="{StaticResource Card}">
+                <Border x:Name="ApiCard" Grid.Row="1" Style="{StaticResource Card}">
                     <StackPanel>
                         <TextBlock Style="{StaticResource CardTitle}" Text="① 模型与 API" />
 
                         <TextBlock Style="{StaticResource Label}" Text="服务商" />
-                        <ComboBox x:Name="ProviderBox" SelectionChanged="ProviderBox_SelectionChanged">
+                        <ComboBox x:Name="ProviderBox" SelectionChanged="ProviderBox_SelectionChanged"
+                                  DropDownOpened="ProviderBox_DropDownOpened" DropDownClosed="ProviderBox_DropDownClosed">
                             <ComboBoxItem Content="DeepSeek" />
                             <ComboBoxItem Content="通义千问（阿里云百炼）" />
                             <ComboBoxItem Content="其他 OpenAI 兼容接口" />
                         </ComboBox>
+                        <StackPanel Margin="0,8,0,0" Orientation="Horizontal">
+                            <ui:Button Click="SaveApiConfig_click" Content="保存此次配置并命名" />
+                        </StackPanel>
 
                         <TextBlock Style="{StaticResource Label}" Text="API 地址" />
                         <ui:TextBox
@@ -166,7 +176,22 @@
                             IsEditable="True"
                             Text="{Binding ModelName, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
 
-                        <TextBlock Style="{StaticResource Hint}" Text="小节总结始终用这里的模型；翻译用哪个接口在“⑤ 翻译”里选。" />
+                        <Expander Margin="0,8,0,0" Header="高级：接口协议">
+                            <StackPanel>
+                                <ComboBox SelectedValuePath="Tag"
+                                          SelectedValue="{Binding ApiStyle, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                                    <ComboBoxItem Content="标准 OpenAI 兼容协议" Tag="standard" />
+                                    <ComboBoxItem Content="Qwen-MT 翻译专用协议" Tag="qwen-mt" />
+                                </ComboBox>
+                                <TextBlock Style="{StaticResource Hint}" Text="普通对话模型保持标准协议。只有接口文档明确要求翻译专用协议时才切换。" />
+                            </StackPanel>
+                        </Expander>
+
+                        <TextBlock Style="{StaticResource Label}" Text="摘要模型档位" />
+                        <ComboBox
+                            x:Name="SummaryConfigBox"
+                            SelectionChanged="SummaryConfigBox_SelectionChanged" />
+                        <TextBlock Style="{StaticResource Hint}" Text="小结、课堂纪要和“测试连接”都用这个档位的模型。字幕翻译用哪个档位在“⑤ 翻译”里选；翻译专用配置不能做摘要，请为摘要选择支持对话的模型。" />
 
                         <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
                             <ui:Button
@@ -175,15 +200,11 @@
                                 Content="测试连接"
                                 Icon="{ui:SymbolIcon PlugConnected20,
                                                      Filled=False}" />
-                            <TextBlock
-                                x:Name="TestApiResult"
-                                Margin="10,0,0,0"
-                                VerticalAlignment="Center"
-                                TextWrapping="Wrap" />
                         </StackPanel>
+                        <TextBlock x:Name="TestApiResult" Margin="0,8,0,0" TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
-            </StackPanel>
+            </Grid>
 
             <!--  Right column: slides, sections, speech  -->
             <StackPanel Grid.Row="0" Grid.Column="1">
@@ -522,12 +543,29 @@
                             AcceptsReturn="True"
                             Text="{Binding SummaryPrompt, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                             TextWrapping="Wrap" />
+                        <TextBlock Style="{StaticResource Hint}" Text="生成小节总结和笔记时，会自动附加自然表达规则：保留原有事实与结构，避免套话、重复句式和凭空补充细节。" />
                         <ui:Button
                             Margin="0,6,0,0"
                             Click="ResetPrompt_click"
                             Content="恢复默认" />
                     </StackPanel>
                 </Expander>
+            </Border>
+
+            <Border Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource CardTitle}" Text="外观" />
+                    <TextBlock Style="{StaticResource Label}" Text="主题" />
+                    <ComboBox x:Name="ThemeBox" SelectionChanged="ThemeBox_SelectionChanged">
+                        <ComboBoxItem Content="跟随系统" Tag="System" />
+                        <ComboBoxItem Content="浅色" Tag="Light" />
+                        <ComboBoxItem Content="深色" Tag="Dark" />
+                    </ComboBox>
+                    <TextBlock Style="{StaticResource Label}" Text="界面字号与缩放" />
+                    <Slider x:Name="UiScaleSlider" Minimum="0.8" Maximum="1.5" TickFrequency="0.05"
+                            IsSnapToTickEnabled="True" ValueChanged="UiScaleSlider_ValueChanged" />
+                    <TextBlock Style="{StaticResource Hint}" Text="按住 Ctrl 并滚动鼠标滚轮，也可以调整界面字号。" />
+                </StackPanel>
             </Border>
         </Grid>
     </ScrollViewer>

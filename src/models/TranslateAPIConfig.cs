@@ -32,6 +32,29 @@ namespace LiveCaptionsTranslator.models
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
+        /// <summary>
+        /// User-facing name of this configuration slot. Multiple slots can exist per API type
+        /// (see <c>Setting.Configs</c>), so a name lets the user tell them apart.
+        /// </summary>
+        private string configName = "";
+
+        public string ConfigName
+        {
+            get => configName;
+            set
+            {
+                configName = value;
+                OnPropertyChanged("ConfigName");
+            }
+        }
+
+        /// <summary>
+        /// Display label for this slot: the user-set name when present, otherwise "配置 N".
+        /// </summary>
+        [JsonIgnore]
+        public string DisplayName =>
+            string.IsNullOrWhiteSpace(configName) ? "" : configName;
+
         public void OnPropertyChanged([CallerMemberName] string propName = "")
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propName));
@@ -141,6 +164,22 @@ namespace LiveCaptionsTranslator.models
         private string apiKey = "";
         private string apiUrl = "";
 
+        /// <summary>
+        /// Wire format of the endpoint.
+        /// "standard"  – regular OpenAI-compatible chat completion (system + user messages).
+        /// "qwen-mt"   – Qwen-MT style dedicated translation endpoint. It rejects `system`
+        ///              messages and only accepts a single `user` message, so the source/target
+        ///              languages and the interpreter instruction have to travel in
+        ///              `translation_options` instead.
+        /// </summary>
+        private string apiStyle = "standard";
+
+        /// <summary>Source language for the "qwen-mt" wire format. "auto" detects it.</summary>
+        private string sourceLanguage = "auto";
+
+        /// <summary>Glossary terms for the "qwen-mt" wire format. One "source=target" per line.</summary>
+        private string glossaryTerms = "";
+
         public string ApiKey
         {
             get => apiKey;
@@ -157,6 +196,33 @@ namespace LiveCaptionsTranslator.models
             {
                 apiUrl = value;
                 OnPropertyChanged("ApiUrl");
+            }
+        }
+        public string ApiStyle
+        {
+            get => apiStyle;
+            set
+            {
+                apiStyle = value;
+                OnPropertyChanged("ApiStyle");
+            }
+        }
+        public string SourceLanguage
+        {
+            get => sourceLanguage;
+            set
+            {
+                sourceLanguage = value;
+                OnPropertyChanged("SourceLanguage");
+            }
+        }
+        public string GlossaryTerms
+        {
+            get => glossaryTerms;
+            set
+            {
+                glossaryTerms = value;
+                OnPropertyChanged("GlossaryTerms");
             }
         }
     }

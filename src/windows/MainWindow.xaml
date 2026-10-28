@@ -14,7 +14,8 @@
     Background="Transparent"
     ExtendsContentIntoTitleBar="True"
     LocationChanged="MainWindow_LocationChanged"
-    ResizeMode="CanResizeWithGrip"
+    PreviewMouseWheel="MainWindow_PreviewMouseWheel"
+    ResizeMode="CanResize"
     SizeChanged="MainWindow_SizeChanged"
     Topmost="True"
     WindowBackdropType="Mica"
@@ -31,8 +32,8 @@
 
             <ui:TitleBar
                 Grid.Row="0"
-                Height="27"
-                ShowMaximize="False">
+                Height="42"
+                ShowMaximize="True">
                 <ui:TitleBar.Header>
                     <ui:TextBlock Padding="15,0,0,0" VerticalAlignment="Center">课堂同传助手</ui:TextBlock>
                 </ui:TitleBar.Header>
@@ -117,6 +118,9 @@
                 IsPaneOpen="False"
                 IsPaneToggleVisible="False"
                 PaneDisplayMode="LeftMinimal">
+                <ui:NavigationView.LayoutTransform>
+                    <ScaleTransform x:Name="UiScaleTransform" ScaleX="1" ScaleY="1" />
+                </ui:NavigationView.LayoutTransform>
                 <ui:NavigationView.MenuItems>
                     <ui:NavigationViewItem
                         Margin="0,6,0,3"

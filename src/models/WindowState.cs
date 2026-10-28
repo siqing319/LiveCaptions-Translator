@@ -14,6 +14,19 @@ namespace LiveCaptionsTranslator.models
         private int originalFontSize = 15;
         private int translatedFontSize = 18;
         private double sectionPanelWidth = 320;
+        private string theme = "System";
+        private double uiScale = 1.0;
+
+        public string Theme
+        {
+            get => theme;
+            set { theme = value is "Light" or "Dark" ? value : "System"; OnPropertyChanged("Theme"); }
+        }
+        public double UiScale
+        {
+            get => uiScale;
+            set { uiScale = Math.Clamp(value, 0.8, 1.5); OnPropertyChanged("UiScale"); }
+        }
 
         public bool Topmost
         {

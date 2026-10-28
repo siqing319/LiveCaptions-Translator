@@ -45,6 +45,7 @@ namespace LiveCaptionsTranslator.utils
                 "Never invent content; where the transcript is unclear, leave it out. " +
                 "Finish with a section of 3–5 review questions. Answer with the notes only." +
                 LectureState.SubjectHint();
+            system += LectureState.NATURAL_NOTES_HINT;
 
             var user = new StringBuilder();
             user.AppendLine($"Course: {lecture.CourseName}");

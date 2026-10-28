@@ -68,6 +68,10 @@ namespace LiveCaptionsTranslator.apis
             string language = OpenAIConfig.SupportedLanguages.TryGetValue(
                 Translator.Setting.TargetLanguage, out var langValue) ? langValue : Translator.Setting.TargetLanguage;
 
+            // Qwen-MT style endpoints reject `system` messages and accept
+            // exactly one `user` message, so they take a different wire format entirely.
+            bool isQwenMT = string.Equals(config.ApiStyle, "qwen-mt", StringComparison.OrdinalIgnoreCase);
+
             var messages = new List<BaseLLMConfig.Message>
             {
                 new BaseLLMConfig.Message { role = "system", content = string.Format(Prompt, language) + LectureState.SubjectHint() },
@@ -87,6 +91,67 @@ namespace LiveCaptionsTranslator.apis
                         new BaseLLMConfig.Message { role = "user", content = $"🔤 {entry.SourceText} 🔤" },
                         new BaseLLMConfig.Message { role = "assistant", content = $"{translatedText}" }
                     ]);
+                }
+            }
+
+            if (isQwenMT)
+            {
+                // Collapse everything into a single user message and carry the instruction
+                // plus the language pair in translation_options.
+                string sourceText = text;
+                if (Translator.Setting.ContextAware && messages.Count > 2)
+                {
+                    // Keep the recent source sentences as context, prefixed so the model can
+                    // tell them apart from the sentence that actually needs translating.
+                    var contextLines = new List<string>();
+                    for (int i = 1; i < messages.Count - 1; i += 2)
+                        contextLines.Add(messages[i].content);
+                    if (contextLines.Count > 0)
+                        sourceText = string.Join("\n", contextLines) + "\n" + text;
+                }
+
+                string targetLang = QwenMTLanguage(language);
+                var requestData = new QwenMTRequestData(config.ModelName,
+                    new List<BaseLLMConfig.Message>
+                    {
+                        new BaseLLMConfig.Message { role = "user", content = sourceText }
+                    },
+                    config.Temperature);
+                requestData.translation_options.source_lang =
+                    string.IsNullOrWhiteSpace(config.SourceLanguage) ? "auto" : config.SourceLanguage.Trim();
+                requestData.translation_options.target_lang = targetLang;
+
+                var terms = ParseGlossaryTerms(config.GlossaryTerms);
+                if (terms.Count > 0)
+                    requestData.translation_options.terms = terms;
+
+                string jsonContent = JsonSerializer.Serialize(requestData, requestData.GetType());
+                var request = new HttpRequestMessage(HttpMethod.Post, TextUtil.NormalizeUrl(config.ApiUrl))
+                {
+                    Content = new StringContent(jsonContent, Encoding.UTF8, "application/json")
+                };
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.ApiKey.Trim());
+
+                try
+                {
+                    var mtResponse = await client.SendAsync(request, token);
+                    string body = await mtResponse.Content.ReadAsStringAsync();
+                    if (!mtResponse.IsSuccessStatusCode)
+                        return FormatOpenAIError(mtResponse.StatusCode, body);
+
+                    var responseObj = JsonSerializer.Deserialize<OpenAIConfig.Response>(body);
+                    if (responseObj?.choices == null || responseObj.choices.Count == 0)
+                        return "[ERROR] 翻译失败：接口返回了空结果。";
+                    string output = responseObj.choices[0].message.content ?? "";
+                    return RegexPatterns.ModelThinking().Replace(output, "");
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    return $"[ERROR] 翻译失败：{ex.Message}";
                 }
             }
 
@@ -155,6 +220,79 @@ namespace LiveCaptionsTranslator.apis
                 return $"[ERROR] 翻译失败：{TextUtil.ArrearageMessage}";
             else
                 return HttpError(response);
+        }
+
+        /// <summary>
+        /// Maps the app's BCP-47-ish target language to the language name/code that the
+        /// Qwen-MT translation endpoints expect in `translation_options.target_lang`.
+        /// </summary>
+        private static string QwenMTLanguage(string language)
+        {
+            return language switch
+            {
+                "zh-CN" => "Chinese",
+                "zh-TW" => "Traditional Chinese",
+                "en-US" => "English",
+                "en-GB" => "English",
+                "ja-JP" => "Japanese",
+                "ko-KR" => "Korean",
+                "fr-FR" => "French",
+                "th-TH" => "Thai",
+                "ru-RU" => "Russian",
+                "es-ES" => "Spanish",
+                "pt-BR" => "Portuguese",
+                "tr-TR" => "Turkish",
+                "ar-SA" => "Arabic",
+                _ => language
+            };
+        }
+
+        /// <summary>
+        /// Parses the glossary textarea. One term per line, written as
+        /// "source = target" or "source=target". Blank lines are ignored.
+        /// </summary>
+        private static List<QwenMTRequestData.Term> ParseGlossaryTerms(string glossary)
+        {
+            var terms = new List<QwenMTRequestData.Term>();
+            if (string.IsNullOrWhiteSpace(glossary))
+                return terms;
+
+            foreach (var rawLine in glossary.Split('\n'))
+            {
+                string line = rawLine.Trim();
+                if (line.Length == 0 || line.StartsWith("#"))
+                    continue;
+                int sep = line.IndexOf('=');
+                if (sep <= 0)
+                    continue;
+                string source = line[..sep].Trim();
+                string target = line[(sep + 1)..].Trim();
+                if (source.Length == 0 || target.Length == 0)
+                    continue;
+                terms.Add(new QwenMTRequestData.Term { source = source, target = target });
+            }
+            return terms;
+        }
+
+        /// <summary>
+        /// Renders a non-success HTTP response as a readable one-liner for the caption area.
+        /// </summary>
+        private static string FormatOpenAIError(HttpStatusCode status, string body)
+        {
+            if (status == HttpStatusCode.Unauthorized)
+                return "[ERROR] 翻译失败：API Key 无效（HTTP 401），请在“设置”页里重新粘贴 API Key 并点“测试连接”。";
+            if (status == HttpStatusCode.NotFound)
+                return "[ERROR] 翻译失败：接口地址不存在（HTTP 404）。请检查“接口地址”是否填写完整，" +
+                       "通常需要以 /v1/chat/completions 结尾。";
+            if (status == HttpStatusCode.BadRequest)
+            {
+                if (TextUtil.IsArrears(body))
+                    return $"[ERROR] 翻译失败：{TextUtil.ArrearageMessage}";
+                return "[ERROR] 翻译失败：请求参数被接口拒绝（HTTP 400）。请检查模型名称、接口地址和请求协议。";
+            }
+            if (body.Length > 0 && body.Length < 400)
+                return $"[ERROR] 翻译失败（HTTP {(int)status}）：{body}";
+            return $"[ERROR] 翻译失败（HTTP {(int)status}）。";
         }
 
         public static async Task<string> Ollama(string text, CancellationToken token = default)
